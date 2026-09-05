@@ -82,6 +82,143 @@ class CloudTest extends TestCase
         unset($_SERVER['LARAVEL_CLOUD_DISK_CONFIG']);
     }
 
+    public function test_it_can_configure_databases()
+    {
+        $_SERVER['LARAVEL_CLOUD_DATABASE_CONFIG'] = json_encode([
+            [
+                'connection' => 'main',
+                'is_default' => true,
+                'driver' => 'mysql',
+                'host' => 'test-host.mysql.laravel.cloud',
+                'port' => 3306,
+                'database' => 'main',
+                'username' => 'test-username',
+                'password' => 'test-password',
+            ],
+            [
+                'connection' => 'analytics',
+                'is_default' => false,
+                'driver' => 'pgsql',
+                'host' => 'test-host.pg.laravel.cloud',
+                'port' => 5432,
+                'database' => 'analytics',
+                'username' => 'test-username-2',
+                'password' => 'test-password-2',
+            ],
+        ]);
+
+        $defaultConnection = $this->app['config']->get('database.default');
+
+        Cloud::configureDatabases($this->app);
+
+        $this->assertSame('mysql', $this->app['config']->get('database.connections.main.driver'));
+        $this->assertSame('test-host.mysql.laravel.cloud', $this->app['config']->get('database.connections.main.host'));
+        $this->assertSame('main', $this->app['config']->get('database.connections.main.database'));
+        $this->assertSame('utf8mb4', $this->app['config']->get('database.connections.main.charset'));
+
+        $this->assertSame('pgsql', $this->app['config']->get('database.connections.analytics.driver'));
+        $this->assertSame('test-username-2', $this->app['config']->get('database.connections.analytics.username'));
+        $this->assertSame('utf8', $this->app['config']->get('database.connections.analytics.charset'));
+
+        $this->assertSame($defaultConnection, $this->app['config']->get('database.default'));
+
+        unset($_SERVER['LARAVEL_CLOUD_DATABASE_CONFIG']);
+    }
+
+    #[WithConfig('database.connections.mysql.strict', false)]
+    public function test_it_inherits_the_base_connection_configuration_when_configuring_databases()
+    {
+        $_SERVER['LARAVEL_CLOUD_DATABASE_CONFIG'] = json_encode([
+            [
+                'connection' => 'main',
+                'is_default' => true,
+                'driver' => 'mysql',
+                'host' => 'test-host.mysql.laravel.cloud',
+                'port' => 3306,
+                'database' => 'main',
+                'username' => 'test-username',
+                'password' => 'test-password',
+            ],
+        ]);
+
+        Cloud::configureDatabases($this->app);
+
+        $this->assertFalse($this->app['config']->get('database.connections.main.strict'));
+
+        unset($_SERVER['LARAVEL_CLOUD_DATABASE_CONFIG']);
+    }
+
+    #[WithConfig('database.connections.mysql.url', 'mysql://base-url')]
+    public function test_it_ignores_the_base_connection_url_when_configuring_databases()
+    {
+        $_SERVER['LARAVEL_CLOUD_DATABASE_CONFIG'] = json_encode([
+            [
+                'connection' => 'main',
+                'is_default' => true,
+                'driver' => 'mysql',
+                'host' => 'test-host.mysql.laravel.cloud',
+                'port' => 3306,
+                'database' => 'main',
+                'username' => 'test-username',
+                'password' => 'test-password',
+            ],
+        ]);
+
+        Cloud::configureDatabases($this->app);
+
+        $this->assertNull($this->app['config']->get('database.connections.main.url'));
+        $this->assertSame('test-host.mysql.laravel.cloud', $this->app['config']->get('database.connections.main.host'));
+
+        unset($_SERVER['LARAVEL_CLOUD_DATABASE_CONFIG']);
+    }
+
+    public function test_it_configures_unpooled_variants_for_pooled_postgres_databases()
+    {
+        $_SERVER['LARAVEL_CLOUD_DATABASE_CONFIG'] = json_encode([
+            [
+                'connection' => 'main',
+                'is_default' => true,
+                'driver' => 'mysql',
+                'host' => 'test-host.mysql.laravel.cloud',
+                'port' => 3306,
+                'database' => 'main',
+                'username' => 'test-username',
+                'password' => 'test-password',
+            ],
+            [
+                'connection' => 'analytics',
+                'is_default' => false,
+                'driver' => 'pgsql',
+                'host' => 'test-pooler.pg.laravel.cloud',
+                'port' => 5432,
+                'database' => 'analytics',
+                'username' => 'test-username-2',
+                'password' => 'test-password-2',
+            ],
+        ]);
+
+        Cloud::configureDatabases($this->app);
+
+        $this->assertSame('test.pg.laravel.cloud', $this->app['config']->get('database.connections.analytics-unpooled.host'));
+        $this->assertTrue($this->app['config']->get('database.connections.analytics.options')[\PDO::ATTR_EMULATE_PREPARES]);
+        $this->assertNull($this->app['config']->get('database.connections.main-unpooled'));
+
+        unset($_SERVER['LARAVEL_CLOUD_DATABASE_CONFIG']);
+    }
+
+    public function test_it_throws_when_the_database_config_is_malformed()
+    {
+        $_SERVER['LARAVEL_CLOUD_DATABASE_CONFIG'] = '[{"connection":';
+
+        try {
+            $this->expectException(\JsonException::class);
+
+            Cloud::configureDatabases($this->app);
+        } finally {
+            unset($_SERVER['LARAVEL_CLOUD_DATABASE_CONFIG']);
+        }
+    }
+
     public function test_it_respects_log_levels()
     {
         if (isset($_SERVER['LOG_LEVEL'])) {
