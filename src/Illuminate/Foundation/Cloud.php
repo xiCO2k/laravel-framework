@@ -16,6 +16,29 @@ use PDO;
 class Cloud
 {
     /**
+     * The base connection configuration for Laravel Cloud databases.
+     *
+     * @var array<string, array<string, mixed>>
+     */
+    protected static $databaseConnectionDefaults = [
+        'mysql' => [
+            'charset' => 'utf8mb4',
+            'collation' => 'utf8mb4_unicode_ci',
+            'prefix' => '',
+            'prefix_indexes' => true,
+            'strict' => true,
+            'engine' => null,
+        ],
+        'pgsql' => [
+            'charset' => 'utf8',
+            'prefix' => '',
+            'prefix_indexes' => true,
+            'search_path' => 'public',
+            'sslmode' => 'prefer',
+        ],
+    ];
+
+    /**
      * Handle a bootstrapper that is bootstrapping.
      */
     public static function bootstrapperBootstrapping(Application $app, string $bootstrapper): void
@@ -36,6 +59,7 @@ class Cloud
         (match ($bootstrapper) {
             LoadConfiguration::class => function () use ($app) {
                 static::configureDisks($app);
+                static::configureDatabases($app);
                 static::configureUnpooledPostgresConnection($app);
                 static::ensureMigrationsUseUnpooledConnection($app);
                 static::configureManagedQueues($app);
@@ -87,25 +111,66 @@ class Cloud
     }
 
     /**
+     * Configure the Laravel Cloud database connections if applicable.
+     *
+     * @throws \JsonException
+     */
+    public static function configureDatabases(Application $app): void
+    {
+        if (! isset($_SERVER['LARAVEL_CLOUD_DATABASE_CONFIG'])) {
+            return;
+        }
+
+        $databases = json_decode($_SERVER['LARAVEL_CLOUD_DATABASE_CONFIG'], associative: true, flags: JSON_THROW_ON_ERROR);
+
+        foreach ($databases as $database) {
+            $driver = $database['driver'];
+
+            $app['config']->set('database.connections.'.$database['connection'], array_merge(
+                $app['config']->get('database.connections.'.$driver, static::$databaseConnectionDefaults[$driver] ?? []),
+                [
+                    'driver' => $driver,
+                    'url' => null,
+                    'host' => $database['host'],
+                    'port' => $database['port'],
+                    'database' => $database['database'],
+                    'username' => $database['username'],
+                    'password' => $database['password'],
+                ],
+            ));
+
+            static::configureUnpooledVariant($app, $database['connection']);
+        }
+    }
+
+    /**
      * Configure the unpooled Laravel Postgres connection if applicable.
      */
     public static function configureUnpooledPostgresConnection(Application $app): void
     {
-        $host = $app['config']->get('database.connections.pgsql.host', '');
+        static::configureUnpooledVariant($app, 'pgsql');
+    }
+
+    /**
+     * Configure an unpooled variant of the given connection if it uses a pooled Laravel Postgres host.
+     */
+    protected static function configureUnpooledVariant(Application $app, string $connection): void
+    {
+        $host = $app['config']->get('database.connections.'.$connection.'.host', '');
 
         if (str_contains($host, 'pg.laravel.cloud') &&
             str_contains($host, '-pooler')) {
             $app['config']->set(
-                'database.connections.pgsql-unpooled',
-                array_merge($app['config']->get('database.connections.pgsql'), [
+                'database.connections.'.$connection.'-unpooled',
+                array_merge($app['config']->get('database.connections.'.$connection), [
                     'host' => str_replace('-pooler', '', $host),
                 ])
             );
 
             $app['config']->set(
-                'database.connections.pgsql.options',
-                array_merge(
-                    $app['config']->get('database.connections.pgsql.options', []),
+                'database.connections.'.$connection.'.options',
+                array_replace(
+                    $app['config']->get('database.connections.'.$connection.'.options', []),
                     [PDO::ATTR_EMULATE_PREPARES => true],
                 ),
             );
@@ -113,11 +178,21 @@ class Cloud
     }
 
     /**
-     * Ensure that migrations use the unpooled Postgres connection if applicable.
+     * Ensure that migrations use the unpooled database connections if applicable.
      */
     public static function ensureMigrationsUseUnpooledConnection(Application $app): void
     {
-        if (! is_array($app['config']->get('database.connections.pgsql-unpooled'))) {
+        $hasUnpooledConnection = false;
+
+        foreach ($app['config']->get('database.connections', []) as $name => $config) {
+            if (str_ends_with((string) $name, '-unpooled')) {
+                $hasUnpooledConnection = true;
+
+                break;
+            }
+        }
+
+        if (! $hasUnpooledConnection) {
             return;
         }
 
@@ -125,7 +200,9 @@ class Cloud
             $connection ??= $app['config']->get('database.default');
 
             return $resolver->connection(
-                $connection === 'pgsql' ? 'pgsql-unpooled' : $connection
+                is_array($app['config']->get('database.connections.'.$connection.'-unpooled'))
+                    ? $connection.'-unpooled'
+                    : $connection
             );
         });
     }
