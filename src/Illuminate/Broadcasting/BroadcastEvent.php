@@ -10,9 +10,11 @@ use Illuminate\Queue\Attributes\Backoff;
 use Illuminate\Queue\Attributes\DeleteWhenMissingModels;
 use Illuminate\Queue\Attributes\MaxExceptions;
 use Illuminate\Queue\Attributes\ReadsQueueAttributes;
+use Illuminate\Queue\Attributes\RetryFor;
 use Illuminate\Queue\Attributes\Timeout;
 use Illuminate\Queue\Attributes\Tries;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Carbon;
 use ReflectionClass;
 use ReflectionProperty;
 use Throwable;
@@ -199,6 +201,22 @@ class BroadcastEvent implements ShouldQueue
         }
 
         return $this->event->middleware();
+    }
+
+    /**
+     * Determine the time at which the job should timeout.
+     *
+     * @return \DateTime|null
+     */
+    public function retryUntil()
+    {
+        if (! method_exists($this->event, 'retryUntil') && ! isset($this->event->retryUntil)) {
+            $retryFor = $this->getAttributeValue($this->event, RetryFor::class);
+
+            return is_null($retryFor) ? null : Carbon::now()->addSeconds($retryFor);
+        }
+
+        return $this->event->retryUntil ?? $this->event->retryUntil();
     }
 
     /**

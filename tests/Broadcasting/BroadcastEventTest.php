@@ -8,7 +8,9 @@ use Illuminate\Broadcasting\InteractsWithBroadcasting;
 use Illuminate\Broadcasting\UniqueBroadcastEvent;
 use Illuminate\Contracts\Broadcasting\Broadcaster;
 use Illuminate\Contracts\Broadcasting\Factory as BroadcastingFactory;
+use Illuminate\Queue\Attributes\RetryFor;
 use Illuminate\Queue\Attributes\UniqueFor;
+use Illuminate\Support\Carbon;
 use JMac\Testing\Double;
 use JMac\Testing\Integrations\PHPUnit\VerifiesDoubles;
 use PHPUnit\Framework\TestCase;
@@ -183,6 +185,43 @@ class BroadcastEventTest extends TestCase
         $job = new BroadcastEvent($event);
 
         $this->assertFalse($job->deleteWhenMissingModels);
+    }
+
+    public function testRetryUntilProxiesRetryUntilFromUnderlyingEvent()
+    {
+        $event = new class
+        {
+            public function retryUntil()
+            {
+                return Carbon::parse('2026-01-01 00:10:00');
+            }
+        };
+
+        $job = new BroadcastEvent($event);
+
+        $this->assertEquals(Carbon::parse('2026-01-01 00:10:00'), $job->retryUntil());
+    }
+
+    public function testRetryUntilReadsRetryForAttributeFromUnderlyingEvent()
+    {
+        Carbon::setTestNow('2026-01-01 00:00:00');
+
+        try {
+            $job = new BroadcastEvent(new #[RetryFor(minutes: 10)] class
+            {
+            });
+
+            $this->assertEquals(Carbon::parse('2026-01-01 00:10:00'), $job->retryUntil());
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function testRetryUntilIsNullWhenUnderlyingEventDoesNotDefineOne()
+    {
+        $job = new BroadcastEvent(new TestBroadcastEvent);
+
+        $this->assertNull($job->retryUntil());
     }
 
     public function testMiddlewareProxiesFailedHandlerFromUnderlyingEvent()
